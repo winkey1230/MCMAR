@@ -162,6 +162,7 @@ for (scen in scennames) {
   k <- 5
   ## pooled beta -----------
   pbeta_true <- truedata$TrueParamter$beta
+  pbeta_true[1,] <- mean(truedata$TrueParamter$covariate) * pbeta_true[2,] + pbeta_true[1,] # the true average association across all regions
   pbeta_MAE_mv_intercept <- sapply(res_mvmeta_intercept, GetErrorBeta0,
                                    truevalues = pbeta_true[1,]) %>% mean %>% round(3) 
   pbeta_MAE_smv_intercept <- sapply(res_smvmeta_intercept, GetErrorBeta0,
@@ -242,6 +243,53 @@ xlsx::write.xlsx(aic,file = "performance-results-"%+%method%+%".xlsx",sheetName 
 xlsx::write.xlsx(power,file = "performance-results-"%+%method%+%".xlsx",sheetName = "power",append = T)
 
 
+########## get 95% coverage rates for each scenario============================
+Getcoverage <- function(model,mu){
+  a <- nrow(model$coefficients)
+  if(a == 1) ind <- 1:5 else if(a==2) ind <- seq(2,10,2)
+  s2 <- model$vcov[ind,ind]
+  est <- model$coefficients[a,] - mu[a,]
+  b <- est %*% solve(s2) %*% est
+  pchisq(q = b,df = length(est)) < 0.95
+}
+Getcoverage_opt <- function(mvmodel,smvmodel,mu){
+  class(smvmodel) <- "mvmeta"
+  logrr <- (logLik(smvmodel) - logLik(mvmodel)) * 2
+  if(logrr < 3.841459) xx <- Getcoverage(mvmodel,mu)
+  else xx <- Getcoverage(smvmodel,mu)
+  xx
+}
+
+
+coverage95 <- NULL
+method <- method
+for (scen in scennames) {
+  # scen <- scennames[4]
+  load(path%+%"results/simres_"%+%scen%+%"_"%+%method%+%".Rdata")
+  truedata <- simdata[[scen]]
+  truebeta <- truedata$TrueParamter$beta
+  truebeta[1,] <- mean(truedata$TrueParamter$covariate) * truebeta[2,] + truebeta[1,] # the true average association across all regions
+  
+  coverate_mvmeta_intercept <- sapply(res_mvmeta_intercept, Getcoverage, mu = truebeta) %>% mean
+  coverate_smvmeta_intercept <- sapply(res_smvmeta_intercept, Getcoverage, mu = truebeta) %>% mean
+  coverate_opt_intercept <- sapply(1:1000, function(x) Getcoverage_opt(res_mvmeta_intercept[[x]],res_smvmeta_intercept[[x]],mu = truebeta)) %>% mean  
+  
+  coverate_mvmeta_covariate <- sapply(res_mvmeta_covariate, Getcoverage, mu = truebeta) %>% mean
+  coverate_smvmeta_covariate <- sapply(res_smvmeta_covariate, Getcoverage, mu = truebeta) %>% mean
+  coverate_opt_covariate <- sapply(1:1000, function(x) Getcoverage_opt(res_mvmeta_covariate[[x]],res_smvmeta_covariate[[x]],mu = truebeta)) %>% mean  
+  
+  a <- c(coverate_mvmeta_intercept,coverate_smvmeta_intercept,coverate_opt_intercept,
+         coverate_mvmeta_covariate,coverate_smvmeta_covariate,coverate_opt_covariate)
+  coverage95 <- rbind(coverage95,a)
+  colnames(coverage95) <- c("mv_intercept","smv_intercept","opt_intercept",
+                            "mv_covariate","smv_covariate","opt_covariate")
+  
+  rm(res_smvmeta_covariate,res_smvmeta_intercept,res_mvmeta_covariate,res_mvmeta_intercept)
+  gc()
+  cat(scen," ")
+}
+rownames(coverage95) <- scennames
+xlsx::write.xlsx(coverage95,file = "performance-results-"%+%method%+%".xlsx",sheetName = "coverage95",append = T)
 
 
 

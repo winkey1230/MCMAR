@@ -144,7 +144,7 @@ allRRfit0 <- exp(predbeta0 %*% t(difx))
 allRRfit1 <- exp(predbeta1 %*% t(difx))
 !any(rownames(allRRfit0) != CINF$City) # check the order
 allRRfit <- cbind(CINF$citycd,allRRfit0,allRRfit1) %>% as.data.frame()
-names(allRRfit) <- c("citycd","fit0_"%+%objtem,"fit1_"%+%objtem)
+names(allRRfit) <- c("citycd","MMR_"%+%objtem,"MCMAR_"%+%objtem)
 
 citypoints <- CINF[,1:6]
 citypoints <- merge(citypoints,allRRfit,by = "citycd")
@@ -153,7 +153,7 @@ citypoints@proj4string <- mapdata@proj4string
 tempmap <- sf::st_as_sf(mapdata) # transform sp to sf class
 citypoints <- sf::st_as_sf(citypoints)
 
-colornames <- rep(c("fit0_","fit1_"),length(objtem)) %+% rep(objtem,each = 2)
+colornames <- rep(c("MMR_","MCMAR_"),length(objtem)) %+% rep(objtem,each = 2)
 panelnames <- rep(c("MMR (","MCMAR ("),length(objtem)) %+% rep(objtem,each = 2) %+% "%)"
 x <- as.data.frame(citypoints)[,colornames] %>% unlist()
 a <- round(range(x) + c(-0.005,0.005),2)
@@ -165,21 +165,34 @@ for (i in 1:(length(b)-1)) {
   colorlables[i] <- "["%+%b[i]%+%", "%+%b[i+1]%+%")"
 }
 paleta <- brewer.pal(length(colorlables),"RdYlGn")[length(colorlables):1]
-pdf(path%+%"RR_Map_for_Casestudy_onlyintercept.pdf")
-tmap_mode("plot")
-tm_shape(tempmap,ylim = c(1500000,5900000)) +  # limiting the range of coordinate
-  tm_polygons(col = "grey100") + 
-  tm_shape(citypoints) + 
-  tm_bubbles(size = 0.15,col = colornames,palette=paleta,
-             style="fixed", breaks=b,interval.closure="left",labels=colorlables) +
-  tm_layout(panel.labels=panelnames,legend.outside=T,legend.title.size = 0.8,
-            legend.outside.size = 0.2,title = "RR",legend.outside.position = "right") +
-  tm_facets(ncol = 2,nrow = 4) 
-dev.off()
 
-# tmap_mode("view")
-# tm_shape(tempmap) + 
-#   tm_polygons(col = "grey100")
+tmap_mode("plot")
+mapi <- tm_shape(tempmap,ylim = c(1500000,5900000)) +  # 限制坐标，将南海岛排除
+  tm_polygons(col = "grey95") + 
+  tm_shape(World) +
+  tm_polygons(col = "grey95",alpha = 0.5) +
+  tm_shape(citypoints) + 
+  tm_bubbles(size = 0.15,col = colornames,palette=paleta,legend.size.show = F,
+             legend.col.show = F,legend.shape.show = F,
+             style="fixed", breaks=b,interval.closure="left",labels=colorlables) +
+  tm_layout(panel.labels=panelnames,legend.outside=T,legend.title.size = 1.5,panel.label.height = 1.5,
+            legend.outside.size = 0.15,legend.outside.position = "right",legend.text.size = 0.8) +
+  tm_add_legend(title = "RR",col = paleta,labels = colorlables,type = "symbol",shape = 21,size = 0.8) + 
+  tm_facets(ncol = 2,nrow = 4) 
+tmap_save(mapi, path%+%"RR_Map_for_Casestudy_onlyintercept.tiff",
+          width = 15, height = 25, units = "cm",dpi = 300, asp = 0, outer.margins = 0,scale = 0.9)
+# plot the interactive map
+tmap_mode("view")
+tm_shape(tempmap) + 
+  tm_polygons(col = "grey95") + 
+  tm_shape(citypoints) + 
+  tm_bubbles(size = 0.15,col = colornames,palette=paleta,legend.size.show = F,
+             legend.col.show = F,legend.shape.show = F,
+             style="fixed", breaks=b,interval.closure="left",labels=colorlables) +
+  tm_layout(panel.labels=panelnames,legend.outside=T,legend.title.size = 1.5,panel.label.height = 1.5,
+            legend.outside.size = 0.15,legend.outside.position = "right",legend.text.size = 0.8) +
+  tm_add_legend(title = "RR",col = paleta,labels = colorlables,type = "fill") + 
+  tm_facets(ncol = 2,nrow = 4) 
 
 ###############################################################################
 ############ Compare MMR with MCMAR with a covariate #########################
@@ -240,6 +253,56 @@ colnames(fitres) <- c("mvmeta_aic","mvmeta_wald_p","I^2","smvmeta_aic",
                       "smvmeta_wald_p","rho","rho_p")
 xlsx::write.xlsx(fitres,file = path%+%"case_study_covariate_"%+%method%+%Rmethod%+%".xlsx")
 
+################################################################################
+############ selecting covariables based on AIC using a forward method #########
+################################################################################
+method <- "ml"
+xvar <- seq(0,100,by=5)
+bvar <- do.call("onebasis",c(list(x=xvar),attr(M.CB,"argvar")))
+dfvar <- 5
+CINF$`GDP per person` <- CINF$GDP/CINF$Population
+allcovariate <- c("Latitude","Longitude","Altitude","Temperature","Relative humidity",
+                  "Air pressure","Rainfall","Sunshine","Population increase",
+                  "Population density","GDP per person","GDP increase",
+                  "Licensed physicians per 1000 persons","Hospital beds per 1000 persons",
+                  "Traffic","Students per 1000 persons")
+CINF1 <- CINF
+names(CINF1) <- gsub(" ","_",names(CINF1))
+allcovariate0 <- gsub(" ","_",allcovariate)
+formula0 <- yall ~ 1
+aic0 <- AIC(mvmeta(formula0,Sall,method = method,data = CINF))
+while(length(allcovariate0)>0){
+  cat(allcovariate0,aic0,"\n")
+  aic_temp <- NULL
+  for (i in allcovariate0) {
+    formula1 <- update(formula0, ~. + eval(parse(text = i)))
+    a <- mvmeta(formula1,Sall,method = method,data = CINF1) %>% AIC
+    aic_temp <- c(aic_temp,a)
+  }
+  if(any(aic_temp < aic0)){
+    b <- allcovariate0[which.min(aic_temp)]
+    allcovariate0 <- setdiff(allcovariate0,b)
+    formula0 <- as.character(formula0)
+    formula0 <- paste(formula0[2],formula0[1],formula0[3],"+",b) %>% as.formula() 
+    aic0 <- min(aic_temp)
+  } else allcovariate0 <- setdiff(allcovariate0,allcovariate0)
+}
+
+waldtest_n <- function(model,n){
+  m <- model
+  coef <- m$coefficients[n,]
+  vcov <- m$vcov[seq(n,5*n,n),seq(n,5*n,n)]
+  waldstat <- coef%*%solve(vcov)%*%coef
+  df <- length(coef)
+  pvalue <- 1-pchisq(waldstat,df)
+  wald <- c(waldstat,df,pvalue)
+  wald
+}
+fit1 <- mvmeta(formula0,Sall,method = method,data = CINF1)
+waldtest_n(fit1,n=5)
+
+fit1 <- mvmeta(formula0,Sall,method = "reml",data = CINF1)
+waldtest_n(fit1,n=4)
 
 
 
